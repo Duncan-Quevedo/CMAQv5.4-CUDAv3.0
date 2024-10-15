@@ -28,34 +28,13 @@ C %W% %P% %G% %U%
 
 C**********************************************************************
 C
-C  Function: ROS3 solver 
+C  Function: Call CUDA-accelerated ROS3 solver 
 C
 C  Preconditions: None
 C
 C  Key Subroutines/Functions Called: 
-C                                    DEGRADE_BLK
+C                                    KERNELDRIVER
 C
-C  Revision History: Prototype created by Jerry Gipson, August, 2004
-C                    Based on the solver described by Sandu et al
-C                    ( Atm. Env., Vol. 31, No. 20, 1997 ) and included
-C                    in the Kinetic PreProcessor-KPP ( see for example 
-C                    Sandu et al., At, Env., Vol. 37, 5097-5114, 
-C                    2003). This code also incorporates efficiency
-C                    concepts originally developed by M. Jacobson
-C                    for SMVGEAR (Atm. Env., Vol 28, No 2, 1994)
-C                                          
-C                    31 Jan 05 J.Young: get BLKSIZE from dyn alloc horizontal
-C                    & vertical domain specifications module (GRID_CONF)
-C                    29 Jul 05     WTH: Added IF blocks that call degrade 
-C                                       routines if CALL_DEG is true, i.e.,
-C                                       if MECHNAME contains 'TX' substring.
-C                    28 Jun 10 J.Young: convert for Namelist redesign
-C                    29 Mar 11 S.Roselle: Replaced I/O API include files
-C                               with UTILIO_DEFN
-C                    15 Jul 14 B.Hutzell: replaced mechanism include files with 
-C                    RXNS_DATA module, updated explicit interfaces and revised
-C                    block for FPP flag redebug is set in compilation
-C                    21 Mar 22 G . Sarwar: changed BLKLAND to BLKSEAWATER
 C**********************************************************************
 !     USE GRID_CONF               ! horizontal & vertical domain specifications
       USE RXNS_DATA
@@ -69,7 +48,7 @@ C**********************************************************************
       IMPLICIT NONE 
 
 C..Includes:
-      INCLUDE '/global/scratch/projects/fc_aqmel/NSF_CDSandE/rocky8/compiled-programs/installations/openmpi/include/mpif.h'
+      INCLUDE 'mpif.h'
 
 C..Arguments:
       INTEGER,   INTENT( IN ) :: JDATE         ! Current date (YYYYDDD)
@@ -183,22 +162,6 @@ c.....ROS3 intermediate variables
 #endif
 
       INTERFACE
-!         SUBROUTINE RBFEVAL( NCSP, YIN, YDOT )
-!            INTEGER,   INTENT(    IN ) :: NCSP          ! Index of mech to use: 1=gas/day, 2=gas/night
-!            REAL( 8 ), INTENT( INOUT ) :: YIN(  :, : )  ! Species concs, ppm
-!            REAL( 8 ), INTENT(   OUT ) :: YDOT( :, : )  ! Species rates of change, ppm/min
-!         END SUBROUTINE RBFEVAL
-!         SUBROUTINE RBSOLVE( NCSP, RHS )
-!           INTEGER,   INTENT( IN ) :: NCSP        ! Index of chem mech to use: 1=gas/day, 2=gas/night
-!           REAL( 8 ), INTENT( INOUT ) :: RHS( :,: )  ! Right hand side = {b}
-!         END SUBROUTINE RBSOLVE
-!         SUBROUTINE RBJACOB( NCSP, YIN )
-!           INTEGER,   INTENT( IN ) :: NCSP        ! Index of chem mech to use; 1=gas/day, 2=gas/night
-!           REAL( 8 ), INTENT( IN ) :: YIN( :,: )  ! Species concs, ppm
-!         END SUBROUTINE RBJACOB
-!         SUBROUTINE RBDECOMP( NCSP )
-!           INTEGER, INTENT( IN ) :: NCSP  ! Index of chem mech to use: 1=gas/day, 2=gas/night
-!         END SUBROUTINE
           SUBROUTINE KERNELDRIVER( BLKSIZE, Y, RKI, DTSTART,
      &                   CHEMSTEP, NCSP, LORDERING, ISCHAN,   
      &                   IDIAGBEG, DT, TNOW, LPASS, OFFSET,   
@@ -235,7 +198,6 @@ c.....ROS3 intermediate variables
             REAL( 8 ), INTENT( INOUT ) :: ERRMX2( MXCELLS )
             REAL( 8 ), INTENT( IN ) :: RGAM
             INTEGER, INTENT( IN ) :: IARRAY( NCS2 )
-            !INTEGER, INTENT( IN ) :: BLKSIZE
             INTEGER, INTENT( IN ) :: NUMCELLS
             INTEGER, INTENT( IN ) :: N_SPEC
             REAL( 8 ), INTENT( IN ) :: C21
@@ -313,34 +275,6 @@ c.....ROS3 intermediate variables
       END INTERFACE
 
 C**********************************************************************
-
-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
-C The s-stage Rosenbrock method solves the following equations
-C                        s
-C         Y(n+1) = Yn + SUM( Bi * Ki) 
-C                       i=1
-C     where
-C                          i-1                          i
-C         Ki = H * F[ Yn + SUM( Aij * Kj ) ] + H * J * SUM( GAMMAij * Kj ) 
-C                          j=1                         j=1
-C
-C See Sandu et al. for details and the values of Bi, GAMMAij, Aij, etc.
-C
-C For computational efficiency, the equations are re-arranged as  
-C follows (e.g., see Press, Numerical Recipes, Chap 16 on ODEs )
-C
-C     Gi = SUM( GAMMAij * Kj ) + GAMMA * Ki  i=1,...s
-C
-C    [ I / GAMMA H - J ] G1 = F[ Yn ]
-C    [ I / GAMMA H - J ] G2 = F[ Yn + A21 * G1 ] + ( C21 * G1 ) / H
-C    [ I / GAMMA H - J ] G3 = F[ Yn + A31 * G1 + A32 * G2 ] + 
-C                              ( C31 * G1 + C32 G2 ) / H   
-C 
-C The code below sequentially calculates the Gi, and then computes
-C Y(n+1) via the first formula.  Note that the parameter values will be
-C different from those shown in Sandu et al. because the code computes
-C Gi instead of Ki
-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 
       IF ( LFIRST ) THEN
          LFIRST = .FALSE.
@@ -454,9 +388,6 @@ c++++++++++++++++++++++++Debug section++++++++++++++++++++++++++++++++++
 #ifdef sens
        YAVE = 0.0D0
 #endif
-
-      !PRINT *, "NKUSERAT ", SIZEOF( NKUSERAT )
-      !PRINT *, "NCS2 ", NCS2
 
       CALL KERNELDRIVER( BLKSIZE, Y, RKI, DTSTART,
      &                   CHEMSTEP, NCSP, LORDERING, ISCHAN,   

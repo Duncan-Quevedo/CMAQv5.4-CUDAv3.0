@@ -1,4 +1,9 @@
 MODULE RBROUTINES
+!*************************************************************************
+! Module to hold relevant variables in memory available to all device
+! threads. ! Also contains the CUDA kernel and the device subroutines it
+! calls.
+!*************************************************************************
 
    USE CUDAFOR
 
@@ -46,10 +51,8 @@ MODULE RBROUTINES
    INTEGER, DEVICE, ALLOCATABLE :: MZHI1_D( :, : )
    INTEGER, DEVICE, ALLOCATABLE :: MZLO2_D( :, : )
    INTEGER, DEVICE, ALLOCATABLE :: MZILCH_D( :, : )
-
    REAL( 8 ), DEVICE, ALLOCATABLE :: ERR( : )
    REAL( 8 ), DEVICE, ALLOCATABLE :: EXPLIC( :,: )
-
    REAL( 8 ), DEVICE, ALLOCATABLE :: Y_D( :,: )
    REAL( 8 ), DEVICE, ALLOCATABLE :: YDOT_D( :,: )
    REAL( 8 ), DEVICE, ALLOCATABLE :: YP_D( :,: )
@@ -60,12 +63,8 @@ MODULE RBROUTINES
    REAL( 8 ), DEVICE, ALLOCATABLE :: RXRAT_D( :,: )
    REAL( 8 ), DEVICE, ALLOCATABLE :: CC2_D( :,: )
    REAL( 8 ), DEVICE, ALLOCATABLE :: VDIAG_D( :,: )
-
    REAL( 8 ), DEVICE, ALLOCATABLE :: BLKTEMP_D( : )
    REAL( 8 ), DEVICE, ALLOCATABLE :: BLKDENS_D( : )
-
-   !REAL( 8 ), DEVICE, ALLOCATABLE :: ERRYMAX( : )
-   !REAL( 8 ), DEVICE, ALLOCATABLE :: YTOL( : )
 
    CONTAINS
 
@@ -86,22 +85,7 @@ MODULE RBROUTINES
    !                                                                     
    !  Key Subroutines/Functions Called: None
    !
-   !  Revision History: Prototype created by Jerry Gipson, August, 2004
-   !                    Based on the SMVGEAR code originally developed by 
-   !                    M. Jacobson, (Atm. Env., Vol 28, No 2, 1994).
-   !                    31 Jan 05 J.Young: get BLKSIZE from dyn alloc horizontal
-   !                    & vertical domain specifications module (GRID_CONF)
-   !                    28 Jun 10 J.Young: remove unnecessary modules and includes
-   !                    15 Jul 14 B.Hutzell: replaced mechanism include files with 
-   !                    RXNS_DATA module, replaced call to CALC_SPECIAL with 
-   !                    SPECIAL_RATES in RXNS_FUNCTION module and added intent
-   !                    declarations to arguments
    !***********************************************************************
-
-   !      USE RXNS_DATA
-   !      USE RXNS_FUNCTION
-   !      USE RBDATA               ! ROS3 solver data
-         !USE CUDAFOR
 
          IMPLICIT NONE
 
@@ -110,7 +94,6 @@ MODULE RBROUTINES
    !..Arguments:
          INTEGER, VALUE :: NCSP          ! Index of mech to use: 1=gas/day, 2=gas/night
          REAL( 8 ) :: YIN( BLKSIZE,NUMB_MECH_SPC )  ! Species concs, ppm
-         !REAL( 8 ) :: YDOT( BLKSIZE,NUMB_MECH_SPC )
          INTEGER, VALUE :: ISCHAN
          INTEGER, VALUE :: NUMCELLS
          INTEGER, VALUE :: NCS2
@@ -121,7 +104,6 @@ MODULE RBROUTINES
          INTEGER, VALUE :: BLKSIZE
          INTEGER, VALUE :: NUMB_MECH_SPC
          INTEGER, VALUE :: NSPECIAL_RXN
-         !REAL( 8 ) :: BLKTEMP( NUMCELLS) , BLKDENS( NUMCELLS )
 
    !..Parameters: None
 
@@ -135,15 +117,11 @@ MODULE RBROUTINES
          INTEGER :: NRK              ! Reaction number
          INTEGER :: NRX              ! Loop index for number of reactions
          REAL( 8 ) :: FRACN
-         INTEGER :: IX, TX, STRIDE
+         INTEGER :: IX               ! Device thread index
 
    !***********************************************************************      
 
          IF ( NSPECIAL_RXN .GT. 0 ) CALL SPECIAL_RATES_D( NUMCELLS, YIN, BLKSIZE, NUMB_MECH_SPC )   ! calculate special rate coefficients
-
-   !IF ( IX .EQ. 1 ) ! PRINT *, 'EXECUTING ....'
-         !IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X
-         !STRIDE = BLOCKDIM%X * GRIDDIM%X
          
    ! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
    !  Initialize dc/dt
@@ -153,17 +131,14 @@ MODULE RBROUTINES
             DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                YDOT_D( IX,ISP ) = 0.0D0
             END DO
-            !CALL SYNCTHREADS()
          END DO
-         !CALL SYNCTHREADS()
    ! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
    !  Loop over reactions to calculate dc/dt
    ! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 
          DO 100 NRX = 1, NUSERAT_D( NCSP )
          
-            NRK = NKUSERAT_D( NRX,NCSP ) 
-            !PRINT *, "NRK ", NRK
+            NRK = NKUSERAT_D( NRX,NCSP )
 
    !..Calculate reaction rate
             IF ( NREACT_D( NRK ) .EQ. 1 ) THEN
@@ -195,7 +170,6 @@ MODULE RBROUTINES
                   RXRAT_D( IX,NRK ) = RKI_D( IX,NRK )
                END DO
             END IF
-            !CALL SYNCTHREADS()
    !..Subtract loss terms from dc/dt for this reaction 
             DO NR = 1, NREACT_D( NRK )
                ISP1 = IRM2_D( NRK,NR,NCS )
@@ -203,10 +177,7 @@ MODULE RBROUTINES
                   YDOT_D( IX,ISP1 ) = YDOT_D( IX,ISP1 ) &
                                     - RXRAT_D( IX,NRK )
                END DO
-               !CALL SYNCTHREADS()
             END DO
-            !CALL SYNCTHREADS()
-            !IF ( BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X .EQ. 1 ) PRINT *, 'YDOT ', MAXVAL( YDOT_D )
    !..Add production terms to dc/dt for this reaction
             DO NP = 1, NPRDCT_D( NRK )
                ISP1 = IRM2_D( NRK,NP+3,NCS )
@@ -214,14 +185,8 @@ MODULE RBROUTINES
                   YDOT_D( IX,ISP1 ) = YDOT_D( IX,ISP1 ) &
                                     + SC_D( NRK,NP ) * RXRAT_D( IX,NRK )
                END DO
-               !CALL SYNCTHREADS()
             END DO
-            !IF ( BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X .EQ. 1 ) PRINT *, 'YDOT ', MAXVAL( YDOT_D )
-            !CALL SYNCTHREADS()
    100   CONTINUE               ! END LOOP OVER REACTIONS
-         !IF ( IX .EQ. 1 ) ! PRINT *, 'RETURNING RBFEVAL....'
-         ! PRINT *, 'RETURNING RBFEVAL....'
-         !CALL SYNCTHREADS()
          RETURN
       END
 
@@ -239,22 +204,7 @@ MODULE RBROUTINES
    !
    !  Key Subroutines/Functions Called: None
    !
-   !  Revision History: Prototype created by Jerry Gipson, August, 2004
-   !                    Based on the SMVGEAR code originally developed by 
-   !                    M. Jacobson, (Atm. Env., Vol 28, No 2, 1994).
-   !
-   !                    31 Jan 05 J.Young: get BLKSIZE from dyn alloc horizontal
-   !                    & vertical domain specifications module (GRID_CONF)
-   !                    28 Jun 10 J.Young: remove unneccesary modules and include files
-   !                    22 Aug 11 J.Young: fixed bug: initialize CC2( IX,0 )
-   !                    15 Jul 14 B.Hutzell: replaced mechanism include files with 
-   !                    RXNS_DATA module and added intent declarations to arguments
-   !
    !***********************************************************************
-
-   !      USE RXNS_DATA
-   !      USE RBDATA                ! ROS3 solver data
-         !USE CUDAFOR
 
          IMPLICIT NONE
 
@@ -274,8 +224,6 @@ MODULE RBROUTINES
          INTEGER, VALUE :: BLKSIZE
          INTEGER, VALUE :: NCS
          INTEGER, VALUE :: NUMB_MECH_SPC
-         INTEGER, VALUE :: MXARRAY
-         INTEGER :: IX                              ! Device thread index
 
    !..Parameters: None
 
@@ -298,38 +246,29 @@ MODULE RBROUTINES
          INTEGER :: NONDIAG        ! Pointer to end of off-diagonal entries
          INTEGER :: NONDIAG1       ! Pointer to start of diagonal entries
 
-         INTEGER TX, STRIDE
+         INTEGER :: IX             ! Device thread index
          
-         REAL( 8 ) :: CR2                   ! Temporary product for 3 reactant rxns
-         REAL( 8 ) :: FRACN                 ! Stoichiometric coeff. times b*h
-         !REAL( 8 ) :: EXPLIC( BLKSIZE,3 )   ! Reaction partial derivative terms
+         REAL( 8 ) :: CR2          ! Temporary product for 3 reactant rxns
+         REAL( 8 ) :: FRACN        ! Stoichiometric coeff. times b*h
 
    !***********************************************************************
-   !IF ( IX .EQ. 1 ) ! PRINT *, 'EXECUTING ....'
-         !IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X
-         !STRIDE = BLOCKDIM%X * GRIDDIM%X
+
    ! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
    !  Zero out Jacobian ( stored in sparse matrix array cc2 )
    ! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
          IARRY = IARRAY_D( NCSP ) 
          NONDIAG = IARRY - ISCHAN  
          NONDIAG1 = NONDIAG + 1
-   !     DO IAR = 1, NONDIAG
          DO IAR = 0, NONDIAG
             DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                CC2_D( IX,IAR ) = 0.0D0
             END DO
-            !CALL SYNCTHREADS()
          END DO
-         !CALL SYNCTHREADS()
          DO IAR = NONDIAG1, IARRY
             DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                CC2_D( IX,IAR ) = 0.0D0
             END DO
-            !CALL SYNCTHREADS()
          END DO
-
-         !CALL SYNCTHREADS()
 
    ! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
    !  Loop over reaction rates adding partial derivative terms; EXPLIC
@@ -342,8 +281,7 @@ MODULE RBROUTINES
    !...partial derivative term for reactions with 1 reactant
             IF ( NREACT_D( NRK ) .EQ. 1 ) THEN
                DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
-                  EXPLIC( IX,1 ) = RKI_D( IX,NRK ) 
-                  !IF ( IX .EQ. 1 ) PRINT *, 'NREACT = 1', EXPLIC( IX,1 )
+                  EXPLIC( IX,1 ) = RKI_D( IX,NRK )
                END DO
 
    !...partial derivative terms for reactions with 2 reactants
@@ -355,7 +293,6 @@ MODULE RBROUTINES
                                     * YIN( IX,JR2 )
                   EXPLIC( IX,2 )  = RKI_D( IX,NRK ) &
                                     * YIN( IX,JR1 )
-                  !IF ( IX .EQ. 1 ) PRINT *, 'NREACT = 2', EXPLIC( IX,1 ), EXPLIC( IX,2 )
                END DO
 
    !.....partial derivative terms for reactions with 3 reactants
@@ -366,21 +303,13 @@ MODULE RBROUTINES
                DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                   CR2 = RKI_D( IX,NRK ) * YIN( IX,JR2 )
                   EXPLIC( IX,1 ) = CR2 * YIN( IX,JR3 )
-                  !EXPLIC( IX,1 ) = RKI_D( IX,NRK ) &
-                  !                  * YIN( IX,JR2 ) &
-                  !                  * YIN( IX,JR3 )
                   EXPLIC( IX,2 ) = RKI_D( IX,NRK ) &
                                     * YIN( IX,JR1 ) &
                                     * YIN( IX,JR3 ) 
                   EXPLIC( IX,3 ) = CR2 * YIN( IX,JR1 )
-                  !EXPLIC( IX,3 ) = RKI_D( IX,NRK ) &
-                  !                  * YIN( IX,JR1 ) &
-                  !                  * YIN( IX,JR2 )
-                  !IF ( IX .EQ. 1 ) PRINT *, 'NREACT = 3', EXPLIC( IX,1 ), EXPLIC( IX,2 ), EXPLIC( IX,3 )
                END DO
             END IF
 
-            !CALL SYNCTHREADS()
    ! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
    !  Add PD terms to [J] for this reaction
    ! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -392,9 +321,7 @@ MODULE RBROUTINES
                DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                   CC2_D( IX,IARP ) = CC2_D( IX,IARP ) - EXPLIC( IX,IALP ) 
                END DO
-               !CALL SYNCTHREADS()
             END DO    ! End loop over loss terms
-            !CALL SYNCTHREADS()
    !...production terms with stoichiomteric coeff EQ 1.0 and NE 1.0
             NPD = NDERIVP_D( NRK,NCSP )
             DO 220 NP = 1, NPD
@@ -411,17 +338,13 @@ MODULE RBROUTINES
    !..production terms with non-unit stoichiometry
                   ISCP = ICOEFF_D( NRK,NP,NCSP )
                   FRACN = SC_D( NRK,ISCP )
-                  !IF ( IX .EQ. 1 ) PRINT *, 'SC_D ', SC_D( NRK,ISCP ), 'FRACN ', FRACN
                   DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                      CC2_D( IX,IARP ) = CC2_D( IX,IARP ) + FRACN &
                                        * EXPLIC( IX,IALP )
                   END DO
                END IF
-               !CALL SYNCTHREADS()
-   220      END DO !CONTINUE      ! End loop over production terms
-            !CALL SYNCTHREADS()
-   240   END DO !CONTINUE      ! End loop over reactions
-         !CALL SYNCTHREADS()
+   220      END DO      ! End loop over production terms
+   240   END DO      ! End loop over reactions
 
          RETURN 
       END
@@ -440,15 +363,7 @@ MODULE RBROUTINES
    !!                                                                     
    !!  Key Subroutines/Functions Called: None
    !!
-   !!  Revision History: Prototype created by Jerry Gipson, August, 2004.
-   !!                      Based on the SMVGEAR code originally developed by 
-   !!                      M. Jacobson, (Atm. Env., Vol 28, No 2, 1994).
-   !!
-   !!  14 Jul 14 B.Hutzell: added intent declaration to arguments
    !!***********************************************************************
-
-   !      USE RBDATA              ! ROS3 solver data
-         !USE CUDAFOR
 
          IMPLICIT NONE
          
@@ -463,8 +378,6 @@ MODULE RBROUTINES
          INTEGER, VALUE :: MXCOUNT2
          INTEGER, VALUE :: NUMCELLS
          INTEGER, VALUE :: MXARRAY
-         INTEGER, VALUE :: BLKSIZE
-         INTEGER :: IX
 
    !!..Parameters: None
 
@@ -490,12 +403,10 @@ MODULE RBROUTINES
          INTEGER :: KJ0             ! Pointer to kj term 1 in decomp loop 1
          INTEGER :: KJ1             ! Pointer to kj term 2 in decomp loop 1
 
-         INTEGER TX, STRIDE
+         INTEGER IX                 ! Device thread index
       
    !!***********************************************************************      
-   !IF ( IX .EQ. 1 ) ! PRINT *, 'EXECUTING ....'
-         !IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X
-         !STRIDE = BLOCKDIM%X * GRIDDIM%X
+
    !! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
    !!  First loop of L-U decomposition 
    !! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -510,22 +421,18 @@ MODULE RBROUTINES
                IK1 = IKDECB_D( IC )
                KJ0 = KJDECA_D( IC )
                KJ1 = KJDECB_D( IC )
-               !CALL SYNCTHREADS()
                DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                   CC2_D( IX,IJ0 ) = CC2_D( IX,IJ0 ) &
                                  - CC2_D( IX,IK0 ) * CC2_D( IX,KJ0 )
                   CC2_D( IX,IJ1 ) = CC2_D( IX,IJ1 ) &
                                  - CC2_D( IX,IK1 ) * CC2_D( IX,KJ1 )
                END DO
-               !CALL SYNCTHREADS()
             END DO
-            !CALL SYNCTHREADS()
    !...vdiag = 1 / current diagonal term of the decomposed matrix
             IAR = JARRAYPT_D( J, J, NCSP )
             DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                VDIAG_D( IX,J )  = 1.0D0 / CC2_D( IX,IAR )
             END DO
-            !CALL SYNCTHREADS()
    !! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
    !!  Second loop of decompostion. The elements of L are divided by the
    !!  diagonal element, and the process is divided into parts to improve
@@ -544,21 +451,15 @@ MODULE RBROUTINES
                   CC2_D( IX,IJA ) = CC2_D( IX,IJA ) * VDIAG_D( IX,J )  
                   CC2_D( IX,IJB ) = CC2_D( IX,IJB ) * VDIAG_D( IX,J )  
                END DO
-               !CALL SYNCTHREADS()
             END DO
-            !CALL SYNCTHREADS()
    !!...do 1 term at a time 
             DO JC = JLO2, JHI2 
                IJA = JZEROA_D( JC )
                DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                   CC2_D( IX,IJA ) = CC2_D( IX,IJA ) * VDIAG_D( IX,J )
                END DO
-               !CALL SYNCTHREADS()
             END DO
-            !CALL SYNCTHREADS()
-   100   END DO !CONTINUE
-         !IF ( IX .EQ. 1 ) ! PRINT *, 'RETURNING RBDECOMP....'
-         !CALL SYNCTHREADS()
+   100   END DO
          RETURN
       END
 
@@ -578,18 +479,7 @@ MODULE RBROUTINES
    !                                                                     
    !  Key Subroutines/Functions Called: None
    !
-   !  Revision History: Prototype created by Jerry Gipson, August, 2004.
-   !                    Based on the SMVGEAR code originally developed by 
-   !                    M. Jacobson, (Atm. Env., Vol 28, No 2, 1994)
-   !
-   !                    31 Jan 05 J.Young: get BLKSIZE from dyn alloc horizontal
-   !                    & vertical domain specifications module (GRID_CONF)
-   !                    28 Jun 10 J.Young: remove unnecessary modules and include files
-   !                    14 Jul 14 B.Hutzell: added intent declaration to arguments
    !***********************************************************************
-
-   !      USE RBDATA                       ! ROS3 solver data
-         !USE CUDAFOR
 
          IMPLICIT NONE
          
@@ -605,7 +495,6 @@ MODULE RBROUTINES
          INTEGER, VALUE :: BLKSIZE
          INTEGER, VALUE :: N_SPEC
          INTEGER, VALUE :: NUMB_MECH_SPC
-         INTEGER :: IX
 
    !..Parameters: None
 
@@ -615,16 +504,14 @@ MODULE RBROUTINES
          INTEGER :: I                        ! Loop index for number of species
          INTEGER :: IJ                       ! Counter of # of terms summed
          INTEGER :: IJ0, IJ1, IJ2,  &        ! Pointers to location of ij entries in
-               IJ3, IJ4                    ! decomposed matrix
+               IJ3, IJ4                      ! decomposed matrix
          INTEGER :: J, J1, J2, J3, J4        ! Pointers to species # for dc/dt
          INTEGER :: JZ                       ! Loop index inner backsub loops
 
-         INTEGER TX, STRIDE
+         INTEGER IX                          ! Device thread index
 
    !***********************************************************************
-   !IF ( IX .EQ. 1 ) ! PRINT *, 'EXECUTING ....'
-         !IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X
-         !STRIDE = BLOCKDIM%X * GRIDDIM%X
+
    ! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
    !  Back-substition loop 1
    ! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -643,7 +530,6 @@ MODULE RBROUTINES
                J2  = KZERO_D( IJ2,NCSP )
                J3  = KZERO_D( IJ3,NCSP )
                J4  = KZERO_D( IJ4,NCSP )
-               !CALL SYNCTHREADS()
                IJ = IJ + 5
                DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                   RHS( IX,I ) = RHS( IX,I ) &
@@ -653,38 +539,30 @@ MODULE RBROUTINES
                                  - CC2_D( IX,IJ3 ) * RHS( IX,J3 ) &
                                  - CC2_D( IX,IJ4 ) * RHS( IX,J4 )
                END DO
-               !CALL SYNCTHREADS()
             END DO
-            !CALL SYNCTHREADS()
    !.....sum 2 terms at a time
             DO JZ = KZLO1_D( I,NCSP ), KZHI1_D( I,NCSP ), 2    
                IJ0 = IJ 
                IJ1 = IJ + 1
                J   = KZERO_D( IJ0,NCSP )
                J1  = KZERO_D( IJ1,NCSP )
-               !CALL SYNCTHREADS()
                IJ = IJ + 2
                DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                   RHS( IX,I ) = RHS( IX,I ) &
                                  - CC2_D( IX,IJ0 ) * RHS( IX, J ) &
                                  - CC2_D( IX,IJ1 ) * RHS( IX,J1 )
                END DO
-               !CALL SYNCTHREADS()
             END DO
-            !CALL SYNCTHREADS()
    !.....sum 1 term at a time
             DO JZ = KZLO2_D( I,NCSP ), KZILCH_D( I,NCSP )    
                IJ0 = IJ
                J   = KZERO_D( IJ0,NCSP )
-               !CALL SYNCTHREADS()
                IJ = IJ + 1
                DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                   RHS( IX,I ) = RHS( IX,I ) &
                                  - CC2_D( IX,IJ0 ) * RHS( IX,J )
                END DO
-               !CALL SYNCTHREADS()
             END DO
-            !CALL SYNCTHREADS()
    60    CONTINUE
    
    ! ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -704,7 +582,6 @@ MODULE RBROUTINES
                J2  = KZERO_D( IJ2,NCSP )
                J3  = KZERO_D( IJ3,NCSP )
                J4  = KZERO_D( IJ4,NCSP )
-               !CALL SYNCTHREADS()
                IJ = IJ + 5
                DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                   RHS( IX,I ) = RHS( IX,I ) &
@@ -714,45 +591,35 @@ MODULE RBROUTINES
                                  - CC2_D( IX,IJ3 ) * RHS( IX,J3 ) &
                                  - CC2_D( IX,IJ4 ) * RHS( IX,J4 )
                END DO
-               !CALL SYNCTHREADS()
             END DO
-            !CALL SYNCTHREADS()
    !...sum 2 terms at a time 
             DO JZ = MZLO1_D( I,NCSP ), MZHI1_D( I,NCSP ), 2 
                IJ0 = IJ 
                IJ1 = IJ + 1
                J   = KZERO_D( IJ0,NCSP )
                J1  = KZERO_D( IJ1,NCSP )
-               !CALL SYNCTHREADS()
                IJ = IJ + 2
                DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                   RHS( IX,I ) = RHS( IX,I ) &
                                  - CC2_D( IX,IJ0 ) * RHS( IX, J )  &
                                  - CC2_D( IX,IJ1 ) * RHS( IX,J1 ) 
                END DO
-               !CALL SYNCTHREADS()
             END DO
-            !CALL SYNCTHREADS()
    !...sum 1 term at a time
             DO JZ = MZLO2_D( I,NCSP ), MZILCH_D( I,NCSP ) 
                IJ0 = IJ 
                J   = KZERO_D( IJ0,NCSP )
-               !CALL SYNCTHREADS()
                IJ = IJ + 1 
                DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                   RHS( IX,I ) = RHS( IX,I ) &
                                  - CC2_D( IX,IJ0 ) * RHS( IX,J ) 
                END DO
-               !CALL SYNCTHREADS()
             END DO
-            !CALL SYNCTHREADS()
    !...adjust diagonal element
             DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                RHS( IX,I ) = RHS( IX,I ) * VDIAG_D( IX,I )
             END DO
-            !CALL SYNCTHREADS()
    180   CONTINUE
-         !CALL SYNCTHREADS()
          RETURN
          END
 
@@ -760,28 +627,22 @@ MODULE RBROUTINES
 ! Purpose: calculate special rate operators and update
 !         appropriate rate constants
 
-!       USE RXNS_DATA
        IMPLICIT NONE
 
 ! Arguments:
        INTEGER,      INTENT( IN  )   :: NUMCELLS        ! Number of cells in block 
        REAL( 8 ),    INTENT( IN )    :: YIN( BLKSIZE,NUMB_MECH_SPC )       ! species concs
-       !REAL( 8 ),    INTENT( IN )    :: TEMP( BLKSIZE )       ! air temperature, K 
-       !REAL( 8 ),    INTENT( IN )    :: DENS( BLKSIZE )       ! air density, Kg/m3
-       !REAL( 8 ),    INTENT( INOUT ) :: RKI( :, : )     ! reaction rate constant, ppm/min 
-       INTEGER BLKSIZE, NUMB_MECH_SPC
+       INTEGER :: BLKSIZE
+       INTEGER :: NUMB_MECH_SPC
 ! Local:
        REAL( 8 ), PARAMETER :: DENSITY_TO_NUMBER = 2.07930D+19 ! Kg/m3 to molecules/cm3
 
-       INTEGER   :: IX
+       INTEGER   :: IX            ! Device thread index
        REAL( 8 ) :: INV_TEMP
        REAL( 8 ) :: CAIR
        REAL( 8 ) :: CFACT         ! scales operator if not multiplied by RKI, cm^3/(molecule) to 1/(ppm)
        REAL( 8 ) :: CFACT_SQU     ! scales operator if not multiplied by RKI, cm^6/(molec^2) to 1/(ppm^2)
 ! special rate operators listed below
-
-       !IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X
-
 
        DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
           INV_TEMP  = 1.0D0 / BLKTEMP_D( IX )
@@ -811,12 +672,37 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
                                           MXCOUNT2, MXARRAY, NCS, &
                                           NSPECIAL_RXN )
 
-    !USE RBROUTINES
-    !USE CUDAFOR
-
    IMPLICIT NONE
 
-!   Arguments
+!*************************************************************************
+! The s-stage Rosenbrock method solves the following equations
+!                        s
+!         Y(n+1) = Yn + SUM( Bi * Ki) 
+!                       i=1
+!     where
+!                          i-1                          i
+!         Ki = H * F[ Yn + SUM( Aij * Kj ) ] + H * J * SUM( GAMMAij * Kj ) 
+!                          j=1                         j=1
+!
+! See Sandu et al. for details and the values of Bi, GAMMAij, Aij, etc.
+!
+! For computational efficiency, the equations are re-arranged as  
+! follows (e.g., see Press, Numerical Recipes, Chap 16 on ODEs )
+!
+!     Gi = SUM( GAMMAij * Kj ) + GAMMA * Ki  i=1,...s
+!
+!    [ I / GAMMA H - J ] G1 = F[ Yn ]
+!    [ I / GAMMA H - J ] G2 = F[ Yn + A21 * G1 ] + ( C21 * G1 ) / H
+!    [ I / GAMMA H - J ] G3 = F[ Yn + A31 * G1 + A32 * G2 ] + 
+!                              ( C31 * G1 + C32 G2 ) / H   
+! 
+! The code below sequentially calculates the Gi, and then computes
+! Y(n+1) via the first formula.  Note that the parameter values will be
+! different from those shown in Sandu et al. because the code computes
+! Gi instead of Ki
+!*************************************************************************
+
+!  Arguments
    REAL( 8 ), VALUE :: CHEMSTEP
    INTEGER, VALUE :: NCS
    INTEGER, VALUE :: NCSP
@@ -858,8 +744,8 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
    INTEGER, VALUE :: MXCOUNT2
    INTEGER, VALUE :: MXARRAY
    INTEGER, VALUE :: NSPECIAL_RXN
-   !REAL( 8 ) :: BLKTEMP( NUMCELLS ), BLKDENS( NUMCELLS )
-!   Local variables
+
+!  Local variables
    REAL( 8 ) :: DT
    REAL( 8 ) :: TNOW
    LOGICAL :: LPASS
@@ -875,30 +761,15 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
    REAL( 8 ) YTOL
    REAL( 8 ) MAXERR
    REAL( 8 ) DTFAC
-   !REAL( 8 ) DTOLD, DTNEW !, TOLD, TNEW
-   !LOGICAL LPASS_LOC
-   INTEGER IX, TX, STRIDE, IDX, ISTAT
+   INTEGER IX
 
-   !IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X
-   !STRIDE = BLOCKDIM%X * GRIDDIM%X
-
-   !DO IDX = 1, BLOCKDIM%X * GRIDDIM%X
-   !   IF ( TX .EQ. IDX ) PRINT *, TX
-   !END DO
-
-   !IF ( TX .EQ. 1 ) PRINT *, 'DEVICE', 'RKI', MAXVAL( RKI_D( 1:NUMCELLS,: ) ), 'SC', MAXVAL( SC_D )
-
-   !LPASS_LOC = LPASS
+!*************************************************************************
 
    DT = MAX( DTMIN, DTSTART )
    TNOW = 0.0D0
    LPASS = .FALSE.
 
     DO 100 WHILE ( TNOW .LT. CHEMSTEP )
-
-         !IF ( IX .EQ. 1 ) PRINT *, "LOOPING"
-
-         !CALL SYNCTHREADS()
 
          CALL RBFEVAL( NCSP, Y_D,  &
                         NUMCELLS, NCS2, &
@@ -917,9 +788,7 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
                   ERRMX2_D( OFFSET + IX ) = ERRMX2_D( OFFSET + IX ) &
                                           + ERRYMAX * ERRYMAX
                END DO
-               !CALL SYNCTHREADS()
             END DO
-            !CALL SYNCTHREADS()
             RETURN
    
          END IF
@@ -935,7 +804,6 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
 
          GDTINV = DTINV * RGAM
       
-         !CALL SYNCTHREADS()
          CALL RBJACOB( NCSP, Y_D, &
                         ISCHAN, NUMCELLS, &
                         NCS2, NRXNS, &
@@ -947,10 +815,8 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
             DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                CC2_D( IX,J ) = CC2_D( IX,J ) - GDTINV
             END DO
-            !CALL SYNCTHREADS()
          END DO
 
-         !CALL SYNCTHREADS()
          CALL RBDECOMP( NCSP, ISCHAN, &
                         NUMCELLS, NCS2, NUMB_MECH_SPC, &
                         MXCOUNT2, MXARRAY )
@@ -961,10 +827,8 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
             DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                K1_D( IX,N ) = -YDOT_D( IX,N )
             END DO
-            !CALL SYNCTHREADS()
          END DO      
 
-         !CALL SYNCTHREADS()
          CALL RBSOLVE( NCSP, K1_D, ISCHAN, &
                         NUMCELLS, BLKSIZE, N_SPEC, &
                         NCS2, MXARRAY, NUMB_MECH_SPC )
@@ -975,10 +839,8 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
             DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                YP_D( IX,N ) = Y_D( IX,N ) + K1_D( IX,N )
             END DO
-            !CALL SYNCTHREADS()
          END DO      
 
-         !CALL SYNCTHREADS()
          CALL RBFEVAL( NCSP, YP_D,  &
                         NUMCELLS, NCS2, &
                         NRXNS, MXRCT, MXPRD, &
@@ -991,10 +853,8 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
             DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                K2_D( IX,N ) = -YDOT_D( IX,N ) - X21 * K1_D( IX,N )
             END DO
-            !CALL SYNCTHREADS()
          END DO      
 
-         !CALL SYNCTHREADS()
          CALL RBSOLVE( NCSP, K2_D, ISCHAN, &
                         NUMCELLS, BLKSIZE, N_SPEC, &
                         NCS2, MXARRAY, NUMB_MECH_SPC )
@@ -1007,10 +867,8 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
             DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                K3_D( IX,N ) = -YDOT_D( IX,N ) - X31 * K1_D( IX,N ) - X32 * K2_D( IX,N )
             END DO
-            !CALL SYNCTHREADS()
          END DO
 
-         !CALL SYNCTHREADS()
          CALL RBSOLVE( NCSP, K3_D, ISCHAN, &
                         NUMCELLS, BLKSIZE, N_SPEC, &
                         NCS2, MXARRAY, NUMB_MECH_SPC )
@@ -1022,7 +880,6 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
                YP_D( IX,N ) = Y_D( IX,N ) + B1 * K1_D( IX,N ) &
                             + B2 * K2_D( IX,N ) + B3 * K3_D( IX,N )
             END DO
-            !CALL SYNCTHREADS()
          END DO
 
 !   ESTIMATE ERROR
@@ -1030,8 +887,7 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
          DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
             ERR( IX ) = 0.0D+00
          END DO
-         !ERR = 0.0D+00
-         !CALL SYNCTHREADS()
+
          DO N = 1, N_SPEC
             DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                YTOL = ATOL_D( N ) + RTOL_D( N ) * ABS( YP_D( IX,N ) )
@@ -1039,34 +895,23 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
                             + ( ( D1 * K1_D( IX,N ) + D2 * K2_D( IX,N ) &
                             + D3 * K3_D( IX,N ) ) / YTOL ) ** 2
            END DO
-           !CALL SYNCTHREADS()
          END DO
 
-         !IF ( IX .LE. NUMCELLS ) ERR( IX ) = SQRT( ERR( IX ) * RNSPEC )
          DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
             ERR( IX ) = SQRT( ERR( IX ) * RNSPEC )
          END DO
-
-         !IF ( IX .EQ. 1 ) PRINT *, 'RNSPEC ', RNSPEC
 
          MAXERR = MAX( UROUND, MAXVAL( ERR ) )
 
          DTFAC = 0.9D+00 / MAXERR ** GROW
 
-        !IF ( IX .EQ. 1 ) PRINT *, 'MAXERR ', MAXERR
-
         IF ( MAXERR .LE. 1.0D+00 ) THEN
-
-            !IF ( IX .EQ. 1 ) PRINT *, 'MIN YP', MINVAL( YP_D( 1:NUMCELLS,: ) )
 
             DO N = 1, NUMB_MECH_SPC
                DO IX = BLOCKDIM%X * ( BLOCKIDX%X - 1 ) + THREADIDX%X, NUMCELLS, BLOCKDIM%X * GRIDDIM%X
                   Y_D( IX,N ) = MAX( YP_D( IX,N ), CONMIN )
                END DO
-               !CALL SYNCTHREADS()
             END DO
-
-            !IF ( IX .EQ. 1 ) PRINT *, 'MIN Y', MINVAL( Y_D( 1:NUMCELLS,: ) )
 
             TNOW = TEND
             
@@ -1074,35 +919,21 @@ ATTRIBUTES( GLOBAL ) SUBROUTINE RBKERNEL( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
                DTFAC = MAX( FACMIN, MIN( DTFAC, FACMAX ) )
             ELSE
                DTFAC = MAX( FACMIN, MIN( DTFAC, FACONE ) )
-            END IF 
-            !CALL SYNCTHREADS()
+            END IF
 
-            !DTOLD = DT
-            !DTNEW = MIN( DTMAX, MAX( DTMIN, DTFAC * DT ) )
-            !DT = DTNEW
-            !ISTAT = ATOMICCAS( DT, DTOLD, DTNEW )
             DT = MIN( DTMAX, MAX( DTMIN, DTFAC * DT ) )
-            !IF ( IX .EQ. 1 ) DT = MIN( DTMAX, MAX( DTMIN, DTFAC * DT ) )
-
-            !CALL SYNCTHREADS()            
+         
             LPASS = .TRUE.
 
         ELSE
 
-            !DTOLD = DT
-            !DTNEW = FACMIN * DT
-            !DT = DTNEW
-            !ISTAT = ATOMICCAS( DT, DTOLD, DTNEW )
             DT = FACMIN * DT
-            !IF ( IX .EQ. 1 ) DT = FACMIN * DT
 
-            !CALL SYNCTHREADS()
             LPASS = .FALSE.
 
         END IF
       CALL SYNCTHREADS()
 100 END DO
-   !LPASS = LPASS_LOC
    CALL SYNCTHREADS()
    RETURN
 END SUBROUTINE RBKERNEL
@@ -1133,7 +964,12 @@ SUBROUTINE KERNELDRIVER( BLKSIZE, Y, RKI, DTSTART, &
 
    IMPLICIT NONE
 
-!   Arguments
+!*************************************************************************
+! Host routine to allocate and deallocate device memory and invoke
+! rbkernel. Called by rbsolver.
+!*************************************************************************
+
+!  Arguments
    INTEGER :: BLKSIZE
    REAL( 8 ) :: Y( BLKSIZE, NUMB_MECH_SPC )
    REAL( 8 ) :: RKI( BLKSIZE, NRXNS )
@@ -1152,7 +988,6 @@ SUBROUTINE KERNELDRIVER( BLKSIZE, Y, RKI, DTSTART, &
    REAL( 8 ) :: ERRMX2( MXCELLS )
    REAL( 8 ) :: RGAM
    INTEGER :: IARRAY( NCS2 )
-   !INTEGER :: BLKSIZE
    INTEGER :: NUMCELLS
    INTEGER :: N_SPEC
    REAL( 8 ) :: C21
@@ -1226,19 +1061,17 @@ SUBROUTINE KERNELDRIVER( BLKSIZE, Y, RKI, DTSTART, &
    REAL( 8 ) :: BLKTEMP( BLKSIZE )
    REAL( 8 ) :: BLKDENS( BLKSIZE )
    INTEGER :: NSPECIAL_RXN
-!   Local variables
+
+!  Local variables
    TYPE( DIM3 ) :: GRID, TBLOCK
    INTEGER :: ISTAT, MPCOUNT, MAXTHREADS, MAXBLOCKS, MAXWARPS
    TYPE( CUDADEVICEPROP ) :: PROP
    INTEGER :: IERROR, RANK, NPROCS, NDEV, DEVID
    INTEGER( KIND=CUDA_STREAM_KIND ) :: STREAMID
-!  Timing
-   !REAL START, FINISH
 
-   !CALL MPI_BARRIER( MPI_COMM_WORLD, IERROR )
-   !PRINT *, "NKUSERAT ", SIZEOF( NKUSERAT )
-   !PRINT *, "NCS2 ", NCS2
+!*************************************************************************
 
+!  Collecting runtime parameters...
    CALL MPI_COMM_RANK( MPI_COMM_WORLD, RANK, IERROR )
    CALL MPI_COMM_SIZE( MPI_COMM_WORLD, NPROCS, IERROR )
 
@@ -1246,9 +1079,10 @@ SUBROUTINE KERNELDRIVER( BLKSIZE, Y, RKI, DTSTART, &
    DEVID = MOD( RANK,NDEV )
    ISTAT = cudaSetDevice( DEVID )
 
+!  Initializing CUDA streams...
    ISTAT = cudaStreamCreate( STREAMID )
-   !STREAMID = cudaStreamPerThread
 
+!  Allocating device variables...
    ALLOCATE( &
       ATOL_D( NUMB_MECH_SPC ), &
       RTOL_D( NUMB_MECH_SPC ), &
@@ -1306,172 +1140,66 @@ SUBROUTINE KERNELDRIVER( BLKSIZE, Y, RKI, DTSTART, &
       VDIAG_D( BLKSIZE, NUMB_MECH_SPC ), &
       BLKTEMP_D( BLKSIZE ), &
       BLKDENS_D( BLKSIZE ) &
-      !ERRYMAX( BLKSIZE ), &
-      !YTOL( BLKSIZE ) &
    )
 
-   !CALL MPI_BARRIER( MPI_COMM_WORLD, IERROR )
-
-   !CALL CPU_TIME( START )
-
-   !CHEMSTEP_D = CHEMSTEP
-   !NCS_D = NCS
-   !NCSP_D = NCSP
-   !LORDERING_D = LORDERING
-   !ISCHAN_D = ISCHAN
-   !IDIAGBEG_D = IDIAGBEG
-   !DT_D = DT
-   !TNOW_D = TNOW
-   !LPASS_D = LPASS
-   !OFFSET_D = OFFSET
-   !RGAM_D = RGAM
-   !BLKSIZE_D = BLKSIZE
-   !NUMCELLS_D = NUMCELLS
-   !N_SPEC_D = N_SPEC
-   !C21_D = C21
-   !C31_D = C31
-   !C32_D = C32
-   !B1_D = B1
-   !B2_D = B2
-   !B3_D = B3
-   !D1_D = D1
-   !D2_D = D2
-   !D3_D = D3
-   !UROUND_D = UROUND
-   !GROW_D = GROW
-   !CONMIN_D = CONMIN
-   !FACMIN_D = FACMIN
-   !FACMAX_D = FACMAX
-   !FACONE_D = FACONE
-   !DTMAX_D = DTMAX
-   !DTMIN_D = DTMIN
-   !MXCELLS_D = MXCELLS
-   !NCS2_D = NCS2
-   !NUMB_MECH_SPC_D = NUMB_MECH_SPC
-   !RNSPEC_D = RNSPEC
-   !NRXNS_D = NRXNS
-   !MXRCT_D = MXRCT
-   !MXPRD_D = MXPRD
-   !MXRR_D = MXRR
-   !MXRP_D = MXRP
-   !MXCOUNT2_D = MXCOUNT2
-   !MXARRAY_D = MXARRAY
-
+!  Copying host variables to device...
    ATOL_D = ATOL
-   !ISTAT = cudaMemcpyAsync( ATOL_D, ATOL, SIZE( ATOL ), STREAMID )
    RTOL_D = RTOL
-   !ISTAT = cudaMemcpyAsync( RTOL_D, RTOL, SIZE( RTOL ), STREAMID )
    ERRMX2_D = ERRMX2
-   !ISTAT = cudaMemcpyAsync( ERRMX2_D, ERRMX2, SIZE( ERRMX2 ), STREAMID )
    IARRAY_D = IARRAY
-   !ISTAT = cudaMemcpyAsync( IARRAY_D, IARRAY, SIZE( IARRAY ), STREAMID )
    NUSERAT_D = NUSERAT
-   !ISTAT = cudaMemcpyAsync( NUSERAT_D, NUSERAT, SIZE( NUSERAT ), STREAMID )
    NKUSERAT_D = NKUSERAT
-   !ISTAT = cudaMemcpyAsync( NKUSERAT_D, NKUSERAT, SIZE( NKUSERAT ), STREAMID )
    NREACT_D = NREACT
-   !ISTAT = cudaMemcpyAsync( NREACT_D, NREACT, SIZE( NREACT ), STREAMID )
    IRM2_D = IRM2
-   !ISTAT = cudaMemcpyAsync( IRM2_D, IRM2, SIZE( IRM2 ), STREAMID )
    NPRDCT_D = NPRDCT
-   !ISTAT = cudaMemcpyAsync( NPRDCT_D, NPRDCT, SIZE( NPRDCT ), STREAMID )
    SC_D = SC
-   !ISTAT = cudaMemcpyAsync( SC_D, SC, SIZE( SC ), STREAMID )
    NDERIVL_D = NDERIVL
-   !ISTAT = cudaMemcpyAsync( NDERIVL_D, NDERIVL, SIZE( NDERIVL ), STREAMID )
    JARRL_D = JARRL
-   !ISTAT = cudaMemcpyAsync( JARRL_D, JARRL, SIZE( JARRL ), STREAMID )
    JLIAL_D = JLIAL
-   !ISTAT = cudaMemcpyAsync( JLIAL_D, JLIAL, SIZE( JLIAL ), STREAMID )
    NDERIVP_D = NDERIVP
-   !ISTAT = cudaMemcpyAsync( NDERIVP_D, NDERIVP, SIZE( NDERIVP ), STREAMID )
    JARRP_D = JARRP
-   !ISTAT = cudaMemcpyAsync( JARRP_D, JARRP, SIZE( JARRP ), STREAMID )
    JPIAL_D = JPIAL
-   !ISTAT = cudaMemcpyAsync( JPIAL_D, JPIAL, SIZE( JPIAL ), STREAMID )
    ICOEFF_D = ICOEFF
-   !ISTAT = cudaMemcpyAsync( ICOEFF_D, ICOEFF, SIZE( ICOEFF ), STREAMID )
    JZLO_D = JZLO
-   !ISTAT = cudaMemcpyAsync( JZLO_D, JZLO, SIZE( JZLO ), STREAMID )
    IDEC1LO_D = IDEC1LO
-   !ISTAT = cudaMemcpyAsync( IDEC1LO_D, IDEC1LO, SIZE( IDEC1LO ), STREAMID )
    IDEC1HI_D = IDEC1HI
-   !ISTAT = cudaMemcpyAsync( IDEC1HI_D, IDEC1HI, SIZE( IDEC1HI ), STREAMID )
    IJDECA_D = IJDECA
-   !ISTAT = cudaMemcpyAsync( IJDECA_D, IJDECA, SIZE( IJDECA ), STREAMID )
    IJDECB_D = IJDECB
-   !ISTAT = cudaMemcpyAsync( IJDECB_D, IJDECB, SIZE( IJDECB ), STREAMID )
    IKDECA_D = IKDECA
-   !ISTAT = cudaMemcpyAsync( IKDECA_D, IKDECA, SIZE( IKDECA ), STREAMID )
    IKDECB_D = IKDECB
-   !ISTAT = cudaMemcpyAsync( IKDECB_D, IKDECB, SIZE( IKDECB ), STREAMID )
    KJDECA_D = KJDECA
-   !ISTAT = cudaMemcpyAsync( KJDECA_D, KJDECA, SIZE( KJDECA ), STREAMID )
    KJDECB_D = KJDECB
-   !ISTAT = cudaMemcpyAsync( KJDECB_D, KJDECB, SIZE( KJDECB ), STREAMID )
    JARRAYPT_D = JARRAYPT
-   !ISTAT = cudaMemcpyAsync( JARRAYPT_D, JARRAYPT, SIZE( JARRAYPT ), STREAMID )
    JHIZ1_D = JHIZ1
-   !ISTAT = cudaMemcpyAsync( JHIZ1_D, JHIZ1, SIZE( JHIZ1 ), STREAMID )
    JHIZ2_D = JHIZ2
-   !ISTAT = cudaMemcpyAsync( JHIZ2_D, JHIZ2, SIZE( JHIZ2 ), STREAMID )
    JZEROA_D = JZEROA
-   !ISTAT = cudaMemcpyAsync( JZEROA_D, JZEROA, SIZE( JZEROA ), STREAMID )
    JZEROB_D = JZEROB
-   !ISTAT = cudaMemcpyAsync( JZEROB_D, JZEROB, SIZE( JZEROB ), STREAMID )
    KZHI0_D = KZHI0
-   !ISTAT = cudaMemcpyAsync( KZHI0_D, KZHI0, SIZE( KZHI0 ), STREAMID )
    KZERO_D = KZERO
-   !ISTAT = cudaMemcpyAsync( KZERO_D, KZERO, SIZE( KZERO ), STREAMID )
    KZLO1_D = KZLO1
-   !ISTAT = cudaMemcpyAsync( KZLO1_D, KZLO1, SIZE( KZLO1 ), STREAMID )
    KZHI1_D = KZHI1
-   !ISTAT = cudaMemcpyAsync( KZHI1_D, KZHI1, SIZE( KZHI1 ), STREAMID )
    KZLO2_D = KZLO2
-   !ISTAT = cudaMemcpyAsync( KZLO2_D, KZLO2, SIZE( KZLO2 ), STREAMID )
    KZILCH_D = KZILCH
-   !ISTAT = cudaMemcpyAsync( KZILCH_D, KZILCH, SIZE( KZILCH ), STREAMID )
    MZHI0_D = MZHI0
-   !ISTAT = cudaMemcpyAsync( MZHI0_D, MZHI0, SIZE( MZHI0 ), STREAMID )
    MZLO1_D = MZLO1
-   !ISTAT = cudaMemcpyAsync( MZLO1_D, MZLO1, SIZE( MZLO1 ), STREAMID )
    MZHI1_D = MZHI1
-   !ISTAT = cudaMemcpyAsync( MZHI1_D, MZHI1, SIZE( MZHI1 ), STREAMID )
    MZLO2_D = MZLO2
-   !ISTAT = cudaMemcpyAsync( MZLO2_D, MZLO2, SIZE( MZLO2 ), STREAMID )
    MZILCH_D = MZILCH
-   !ISTAT = cudaMemcpyAsync( MZILCH_D, MZILCH, SIZE( MZILCH ), STREAMID )
-
    BLKTEMP_D = BLKTEMP
-   !ISTAT = cudaMemcpyAsync( BLKTEMP_D, BLKTEMP, SIZE( BLKTEMP ), STREAMID )
    BLKDENS_D = BLKDENS
-   !ISTAT = cudaMemcpyAsync( BLKDENS_D, BLKDENS, SIZE( BLKDENS ), STREAMID )
-
    Y_D = Y
-   !ISTAT = cudaMemcpyAsync( Y_D, Y, SIZE( Y ), STREAMID )
-   !YDOT_D = YDOT
-   !YP_D = YP
-   !K1_D = K1
-   !K2_D = K2
-   !K3_D = K3
    RKI_D = RKI
-   !ISTAT = cudaMemcpyAsync( RKI_D, RKI, SIZE( RKI ), STREAMID )
-   !RXRAT_D = RXRAT
-   !CC2_D = CC2
-   !VDIAG_D = VDIAG
 
-   !CALL CPU_TIME( FINISH )
-   !PRINT *, 'COPY TO DEVICE TIME: ', FINISH - START
-
+!  Collecting hardware properties...
    ISTAT = cudaGetDeviceProperties( PROP, DEVID )
    MPCOUNT = PROP%multiProcessorCount
    MAXTHREADS = PROP%maxThreadsPerMultiProcessor
    MAXBLOCKS = PROP%maxBlocksPerMultiProcessor
 
+!  Defining thread blocks and grids...
    GRID = DIM3( MAXBLOCKS*MPCOUNT*NDEV/NPROCS,1,1 )
    TBLOCK = DIM3( MAXTHREADS/MAXBLOCKS,1,1 )
 
-   !ISTAT = cudaDeviceSynchronize()
    ISTAT = cudaStreamSynchronize( STREAMID )
 
    CALL RBKERNEL<<< GRID,TBLOCK,0,STREAMID >>>( CHEMSTEP, NCSP, LORDERING, ISCHAN,   &
@@ -1486,92 +1214,17 @@ SUBROUTINE KERNELDRIVER( BLKSIZE, Y, RKI, DTSTART, &
                                                 NSPECIAL_RXN )
 
    ISTAT = cudaStreamSynchronize( STREAMID )
-   !ISTAT = cudaDeviceSynchronize()
    
+!  Check for kernel launch errors...
    ISTAT = cudaGetLastError()
    IF ( ISTAT .NE. cudaSuccess ) PRINT *, cudaGetErrorString( ISTAT )
 
-   !PRINT *, "KERNEL COMPLETE."
 
-   !CALL CPU_TIME( FINISH )
-
-      !PRINT *, 'ROSENBROCK ITERATION TIME: ', FINISH - START
-
-      !IF ( LORDERING ) EXIT
-
-      !TNOW = TNOW_D
-      
-   !END DO
-
-   !CALL MPI_BARRIER( MPI_COMM_WORLD, IERROR )
-
-   !PRINT *, 'KERNEL TIME: ', FINISH - START
-   !CALL CPU_TIME( START )
-
-   !DT = DT_D
-   !TNOW = TNOW_D
-   !LPASS = LPASS_D
-   !ATOL = ATOL_D
-   !RTOL = RTOL_D
+!  Copy relevant device variables back to host...
    ERRMX2 = ERRMX2_D
-   !ISTAT = cudaMemcpyAsync( ERRMX2, ERRMX2_D, SIZE( ERRMX2 ), STREAMID )
-   !IARRAY = IARRAY_D
-   !NUSERAT = NUSERAT_D
-   !NKUSERAT = NKUSERAT_D
-   !NREACT = NREACT_D
-   !IRM2 = IRM2_D
-   !NPRDCT = NPRDCT_D
-   !SC = SC_D
-   !NDERIVL = NDERIVL_D
-   !JARRL = JARRL_D
-   !JLIAL = JLIAL_D
-   !NDERIVP = NDERIVP_D
-   !JARRP = JARRP_D
-   !JPIAL = JPIAL_D
-   !ICOEFF = ICOEFF_D
-   !JZLO = JZLO_D
-   !IDEC1LO = IDEC1LO_D
-   !IDEC1HI = IDEC1HI_D
-   !IJDECA = IJDECA_D
-   !IJDECB = IJDECB_D
-   !IKDECA = IKDECA_D
-   !IKDECB = IKDECB_D
-   !KJDECA = KJDECA_D
-   !KJDECB = KJDECB_D
-   !JARRAYPT = JARRAYPT_D
-   !JHIZ1 = JHIZ1_D
-   !JHIZ2 = JHIZ2_D
-   !JZEROA = JZEROA_D
-   !JZEROB = JZEROB_D
-   !KZHI0 = KZHI0_D
-   !KZERO = KZERO_D
-   !KZLO1 = KZLO1_D
-   !KZHI1 = KZHI1_D
-   !KZLO2 = KZLO2_D
-   !KZILCH = KZILCH_D
-   !MZHI0 = MZHI0_D
-   !MZLO1 = MZLO1_D
-   !MZHI1 = MZHI1_D
-   !MZLO2 = MZLO2_D
-   !MZILCH = MZILCH_D
-
    Y = Y_D
-   !ISTAT = cudaMemcpyAsync( Y, Y_D, SIZE( Y ), STREAMID )
-   !YDOT = YDOT_D
-   !YP = YP_D
-   !K1 = K1_D
-   !K2 = K2_D
-   !K3 = K3_D
-   !RKI = RKI_D
-   !RXRAT = RXRAT_D
-   !CC2 = CC2_D
-   !VDIAG = VDIAG_D
 
-   !CALL CPU_TIME( FINISH )
-   !PRINT *, 'COPY TO HOST TIME: ', FINISH - START
-
-   !CALL MPI_BARRIER( MPI_COMM_WORLD, IERROR )
-
+!  Free device memory...
    DEALLOCATE( &
       Y_D,  &
       YDOT_D,  &
@@ -1629,15 +1282,7 @@ SUBROUTINE KERNELDRIVER( BLKSIZE, Y, RKI, DTSTART, &
       MZILCH_D, &
       BLKTEMP_D, &
       BLKDENS_D &
-      !ERRYMAX, &
-      !YTOL &
    )
-
-   !ISTAT = cudaStreamDestroy( STREAMID )
-
-   !END IF
-
-   !CALL MPI_BARRIER( MPI_COMM_WORLD, IERROR )
 
    RETURN
 
