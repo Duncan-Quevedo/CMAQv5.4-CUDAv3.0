@@ -5,7 +5,7 @@ To prepare for compiling CMAQ-CUDA, first compile CMAQ as normal for your chosen
 Ensure you have the NVIDIA HPC SDK installed for .cuf file compilation down the line.
 
 ### Notes
-1. CMAQ-CUDA does not support ISAM, DDM, IRR or chemical mechanisms relying on degradation routines at this time.
+CMAQ-CUDA does not support ISAM, DDM, IRR or chemical mechanisms relying on degradation routines at this time.
 
 
 ## Compiling CMAQ-CUDA
