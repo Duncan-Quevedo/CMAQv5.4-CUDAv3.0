@@ -4,6 +4,10 @@
 To prepare for compiling CMAQ-CUDA, first compile CMAQ as normal for your chosen chemical mechanism using the ros3 solver.
 Ensure you have the NVIDIA HPC SDK installed for .cuf file compilation down the line.
 
+### Notes
+1. CMAQ-CUDA does not support ISAM, DDM, IRR or chemical mechanisms relying on degradation routines at this time.
+
+
 ## Compiling CMAQ-CUDA
 ### What you'll need to have
 In addition to the NVHPC SDK, you need the rbsolver.F and rbkernel.cuf files found in this repository. Simply copy them into your build directory (note: rbsolver.F will overwrite the normal rbsolver.F--it may be best to back up that file).
